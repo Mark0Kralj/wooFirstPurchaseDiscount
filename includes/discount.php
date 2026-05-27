@@ -27,6 +27,13 @@ class Discount {
 			20,
 			1
 		);
+
+		add_filter(
+			'woocommerce_order_item_product',
+			array( __CLASS__, 'change_order_item_product_sku_by_coupon_discount' ),
+			20,
+			2
+		);
 	}
 
 	public static function apply_discount( $cart ) {
@@ -391,4 +398,169 @@ class Discount {
 
 		return false;
 	}
+	public static function change_order_item_product_sku_by_coupon_discount( $product, $item ) {
+
+		if ( ! $product || ! is_a( $product, 'WC_Product' ) ) {
+			return $product;
+		}
+
+		if ( ! $item || ! is_a( $item, 'WC_Order_Item_Product' ) ) {
+			return $product;
+		}
+
+		$order = $item->get_order();
+
+		if ( ! $order || ! is_a( $order, 'WC_Order' ) ) {
+			return $product;
+		}
+
+		$coupon_data = self::get_order_coupon_discount_data_for_sku( $order );
+
+		if ( empty( $coupon_data['suffix'] ) ) {
+			return $product;
+		}
+
+		$base_sku = self::get_base_sku_from_product_for_order_item( $product );
+
+		if ( empty( $base_sku ) ) {
+			return $product;
+		}
+
+		$discount_sku = $base_sku . $coupon_data['suffix'];
+
+		/*
+		* IMPORTANT:
+		* Clone product so we do NOT change the real WooCommerce product SKU.
+		* This only changes the SKU when product is loaded through order item.
+		*/
+		$cloned_product = clone $product;
+
+		try {
+			$cloned_product->set_sku( $discount_sku );
+		} catch ( \Exception $e ) {
+			return $product;
+		}
+
+		return $cloned_product;
+	}
+
+	private static function get_order_coupon_discount_data_for_sku( $order ) {
+
+		if ( ! $order || ! is_a( $order, 'WC_Order' ) ) {
+			return array();
+		}
+
+		$coupon_codes = $order->get_coupon_codes();
+
+		if ( empty( $coupon_codes ) ) {
+			return array();
+		}
+
+		$selected_coupon = '';
+
+		if ( class_exists( '\FPD\Settings' ) ) {
+			$selected_coupon = Settings::get_coupon_code();
+		}
+
+		/*
+		* First check the coupon selected in First Purchase Discount settings.
+		*/
+		if ( ! empty( $selected_coupon ) ) {
+			foreach ( $coupon_codes as $coupon_code ) {
+				if ( self::is_same_coupon_code( $coupon_code, $selected_coupon ) ) {
+					$data = self::get_coupon_discount_data_for_sku( $coupon_code );
+
+					if ( ! empty( $data ) ) {
+						return $data;
+					}
+				}
+			}
+		}
+
+		/*
+		* Fallback: check any percentage coupon on the order.
+		*/
+		foreach ( $coupon_codes as $coupon_code ) {
+			$data = self::get_coupon_discount_data_for_sku( $coupon_code );
+
+			if ( ! empty( $data ) ) {
+				return $data;
+			}
+		}
+
+		return array();
+	}
+
+	private static function get_coupon_discount_data_for_sku( $coupon_code ) {
+
+		$coupon = new \WC_Coupon( $coupon_code );
+
+		if ( ! $coupon || ! $coupon->get_id() ) {
+			return array();
+		}
+
+		if ( 'percent' !== $coupon->get_discount_type() ) {
+			return array();
+		}
+
+		$percent = (float) $coupon->get_amount();
+		$suffix  = self::get_sku_suffix_by_discount_percent( $percent );
+
+		if ( empty( $suffix ) ) {
+			return array();
+		}
+
+		return array(
+			'coupon_code' => $coupon->get_code(),
+			'percent'     => $percent,
+			'suffix'      => $suffix,
+		);
+	}
+
+	private static function get_base_sku_from_product_for_order_item( $product ) {
+
+		if ( ! $product || ! is_a( $product, 'WC_Product' ) ) {
+			return '';
+		}
+
+		$base_sku = $product->get_sku();
+
+		/*
+		* If variation has no SKU, fallback to parent product SKU.
+		*/
+		if ( empty( $base_sku ) && $product->is_type( 'variation' ) ) {
+			$parent_id = $product->get_parent_id();
+
+			if ( $parent_id ) {
+				$parent_product = wc_get_product( $parent_id );
+
+				if ( $parent_product ) {
+					$base_sku = $parent_product->get_sku();
+				}
+			}
+		}
+
+		return $base_sku;
+	}
+
+	private static function get_sku_suffix_by_discount_percent( $percent ) {
+
+		$percent = (float) $percent;
+
+		$map = array(
+			5  => '.1',
+			10 => '.2',
+			15 => '.3',
+			20 => '.4',
+		);
+
+		foreach ( $map as $discount_percent => $suffix ) {
+			if ( abs( $percent - $discount_percent ) < 0.001 ) {
+				return $suffix;
+			}
+		}
+
+		return '';
+	}
+	
 }
