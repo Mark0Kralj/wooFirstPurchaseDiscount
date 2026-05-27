@@ -76,12 +76,13 @@ class Settings {
 		$value = sanitize_text_field( $value );
 
 		$allowed = array(
+			'disabled',
 			'fee',
 			'coupon',
 		);
 
 		if ( ! in_array( $value, $allowed, true ) ) {
-			return 'fee';
+			return 'disabled';
 		}
 
 		return $value;
@@ -120,10 +121,10 @@ class Settings {
 	}
 
 	public static function get_discount_method() {
-		$method = get_option( self::OPTION_METHOD, 'fee' );
+		$method = get_option( self::OPTION_METHOD, 'disabled' );
 
-		if ( ! in_array( $method, array( 'fee', 'coupon' ), true ) ) {
-			$method = 'fee';
+		if ( ! in_array( $method, array( 'disabled', 'fee', 'coupon' ), true ) ) {
+			$method = 'disabled';
 		}
 
 		return $method;
@@ -251,6 +252,10 @@ class Settings {
 								id="<?php echo esc_attr( self::OPTION_METHOD ); ?>"
 								name="<?php echo esc_attr( self::OPTION_METHOD ); ?>"
 							>
+								<option value="disabled" <?php selected( $discount_method, 'disabled' ); ?>>
+									Disabled
+								</option>
+
 								<option value="fee" <?php selected( $discount_method, 'fee' ); ?>>
 									Automatic cart fee discount
 								</option>

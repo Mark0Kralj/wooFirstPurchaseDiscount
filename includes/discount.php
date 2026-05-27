@@ -46,6 +46,13 @@ class Discount {
 			return;
 		}
 
+		$discount_method = Settings::get_discount_method();
+
+		if ( 'disabled' === $discount_method ) {
+			self::maybe_apply_coupon_discount( $cart );
+			return;
+		}
+
 		if ( 'coupon' === Settings::get_discount_method() ) {
 			self::maybe_apply_coupon_discount( $cart );
 			return;
@@ -414,9 +421,9 @@ class Discount {
 			return $product;
 		}
 
-		$coupon_data = self::get_order_coupon_discount_data_for_sku( $order );
+		$discount_data = self::get_order_item_discount_data_for_sku( $order, $item, $product );
 
-		if ( empty( $coupon_data['suffix'] ) ) {
+		if ( empty( $discount_data['suffix'] ) ) {
 			return $product;
 		}
 
@@ -426,7 +433,7 @@ class Discount {
 			return $product;
 		}
 
-		$discount_sku = $base_sku . $coupon_data['suffix'];
+		$discount_sku = $base_sku . $discount_data['suffix'];
 
 		/*
 		* IMPORTANT:
@@ -542,25 +549,154 @@ class Discount {
 
 		return $base_sku;
 	}
+	private static function get_order_item_discount_data_for_sku( $order, $item, $product ) {
 
+		if (
+			! $order || ! is_a( $order, 'WC_Order' )
+			|| ! $item || ! is_a( $item, 'WC_Order_Item_Product' )
+			|| ! $product || ! is_a( $product, 'WC_Product' )
+		) {
+			return array();
+		}
+
+		$percent = self::get_order_item_effective_discount_percent( $item, $product );
+		$suffix  = self::get_sku_suffix_by_discount_percent( $percent );
+
+		if ( empty( $suffix ) ) {
+			return array();
+		}
+
+		return array(
+			'percent' => $percent,
+			'suffix'  => $suffix,
+		);
+	}
 	private static function get_sku_suffix_by_discount_percent( $percent ) {
 
 		$percent = (float) $percent;
 
-		$map = array(
-			5  => '.1',
-			10 => '.2',
-			15 => '.3',
-			20 => '.4',
-		);
+		/*
+		* IMPORTANT:
+		* Check from highest to lowest.
+		*
+		* 20% or more = SKU.4
+		* 15% or more = SKU.3
+		* 10% or more = SKU.2
+		* 5%  or more = SKU.1
+		*/
+		if ( $percent >= 20 ) {
+			return '.4';
+		}
 
-		foreach ( $map as $discount_percent => $suffix ) {
-			if ( abs( $percent - $discount_percent ) < 0.001 ) {
-				return $suffix;
-			}
+		if ( $percent >= 15 ) {
+			return '.3';
+		}
+
+		if ( $percent >= 10 ) {
+			return '.2';
+		}
+
+		if ( $percent >= 5 ) {
+			return '.1';
 		}
 
 		return '';
 	}
 	
+	private static function get_order_item_effective_discount_percent( $item, $product ) {
+
+		$qty = (float) $item->get_quantity();
+
+		if ( $qty <= 0 ) {
+			$qty = 1;
+		}
+
+		/*
+		* Final discounted line total INCLUDING tax.
+		*
+		* Example:
+		* item total    = 1,666.67
+		* item tax      = 333.33
+		* full total    = 2,000.00
+		*/
+		$discounted_line_total_with_tax =
+			(float) $item->get_total()
+			+ (float) $item->get_total_tax();
+
+		/*
+		* Product regular price.
+		* On your site this appears to be the full price including PDV.
+		*/
+		$regular_price = self::get_product_regular_price_for_discount_check( $product );
+
+		if ( $regular_price > 0 ) {
+
+			$regular_line_total_with_tax = $regular_price * $qty;
+
+			if (
+				$regular_line_total_with_tax > 0
+				&& $discounted_line_total_with_tax < $regular_line_total_with_tax
+			) {
+				return round(
+					(
+						(
+							$regular_line_total_with_tax - $discounted_line_total_with_tax
+						) / $regular_line_total_with_tax
+					) * 100,
+					4
+				);
+			}
+		}
+
+		/*
+		* Fallback:
+		* WooCommerce order item subtotal INCLUDING tax.
+		* This mainly catches coupon/order-level discounts.
+		*/
+		$line_subtotal_with_tax =
+			(float) $item->get_subtotal()
+			+ (float) $item->get_subtotal_tax();
+
+		if (
+			$line_subtotal_with_tax > 0
+			&& $discounted_line_total_with_tax < $line_subtotal_with_tax
+		) {
+			return round(
+				(
+					(
+						$line_subtotal_with_tax - $discounted_line_total_with_tax
+					) / $line_subtotal_with_tax
+				) * 100,
+				4
+			);
+		}
+
+		return 0;
+	}
+
+	private static function get_product_regular_price_for_discount_check( $product ) {
+
+		if ( ! $product || ! is_a( $product, 'WC_Product' ) ) {
+			return 0;
+		}
+
+		$regular_price = (float) $product->get_regular_price();
+
+		/*
+		* If variation regular price is empty, fallback to parent product.
+		*/
+		if ( $regular_price <= 0 && $product->is_type( 'variation' ) ) {
+			$parent_id = $product->get_parent_id();
+
+			if ( $parent_id ) {
+				$parent_product = wc_get_product( $parent_id );
+
+				if ( $parent_product ) {
+					$regular_price = (float) $parent_product->get_regular_price();
+				}
+			}
+		}
+
+		return $regular_price;
+	}
 }
